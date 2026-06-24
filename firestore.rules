@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "midosherif0009@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return (!('email' in data) || isValidEmail(data.email)) &&
+             (!('plan' in data) || data.plan in ['free', 'premium', 'unlimited']) &&
+             (!('uid' in data) || data.uid == request.auth.uid) &&
+             (!('serverCount' in data) || (data.serverCount is number && data.serverCount >= 0));
+    }
+
+    function isValidServer(data) {
+      return hasRequiredFields(['ownerId', 'name', 'language', 'status', 'plan']) &&
+             data.ownerId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.language in ['python', 'javascript', 'php'] &&
+             data.status in ['running', 'stopped', 'starting', 'error'] &&
+             data.plan in ['free', 'premium', 'unlimited'];
+    }
+
+    function isValidFile(data) {
+      return hasRequiredFields(['serverId', 'name', 'content', 'path']) &&
+             data.serverId is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.content is string && data.content.size() < 1048576 &&
+             data.path is string;
+    }
+
+    match /config/global {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) &&
+                       (!('uid' in request.resource.data) || request.resource.data.uid == userId)) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /servers/{serverId} {
+      allow read: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidServer(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin()) &&
+                       isValidServer(request.resource.data) &&
+                       request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
+
+      match /files/{fileId} {
+        allow read: if isAuthenticated() && (get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid || isAdmin());
+        allow create, update: if isAuthenticated() && (get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid || isAdmin()) &&
+                        isValidFile(request.resource.data);
+        allow delete: if isAuthenticated() && (get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid || isAdmin());
+      }
+
+      match /databases/{dbId} {
+        allow read, write: if isAuthenticated() && (get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid || isAdmin());
+      }
+
+      match /backups/{backupId} {
+        allow read, write: if isAuthenticated() && (get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid || isAdmin());
+      }
+    }
+
+    match /rechargeRequests/{requestId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /activities/{activityId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
